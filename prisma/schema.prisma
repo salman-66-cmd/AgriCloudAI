@@ -1,0 +1,210 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String         @id @default(uuid())
+  name         String
+  email        String         @unique
+  passwordHash String
+  role         String         @default("FARMER") // ADMIN, FARMER, VIEWER
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  farms        Farm[]
+  refreshTokens RefreshToken[]
+  notifications Notification[]
+  auditLogs    AuditLog[]
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Farm {
+  id          String   @id @default(uuid())
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name        String
+  location    String
+  area        Float    // Hectares
+  soilType    String   // Loamy, Clay, Sandy, Silty, Peaty, Chalky
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  fields      Field[]
+}
+
+model Crop {
+  id                 String   @id @default(uuid())
+  name               String
+  variety            String?
+  optimalMinMoisture Float    @default(40.0)
+  optimalMaxMoisture Float    @default(70.0)
+  optimalMinTemp     Float    @default(18.0)
+  optimalMaxTemp     Float    @default(30.0)
+  optimalMinPh       Float    @default(6.0)
+  optimalMaxPh       Float    @default(7.5)
+  growthDurationDays Int?
+  description        String?
+  createdAt          DateTime @default(now())
+  fields             Field[]
+}
+
+model Field {
+  id                 String                @id @default(uuid())
+  farmId             String
+  farm               Farm                  @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name               String
+  area               Float                 // Hectares
+  cropId             String?
+  crop               Crop?                 @relation(fields: [cropId], references: [id], onDelete: SetNull)
+  moistureThreshold  Float                 @default(35.0)
+  irrigationEnabled  Boolean               @default(true)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  sensors            Sensor[]
+  irrigationEvents   IrrigationEvent[]
+  irrigationSettings IrrigationSettings?
+  irrigationController IrrigationController?
+  alerts             Alert[]
+}
+
+model Sensor {
+  id          String          @id @default(uuid())
+  fieldId     String
+  field       Field           @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  deviceCode  String          @unique
+  type        String          // SOIL_MOISTURE, TEMPERATURE, HUMIDITY, RAINFALL, SOIL_PH
+  unit        String          // %, °C, %, mm, pH
+  status      String          @default("ONLINE") // ONLINE, OFFLINE, FAULT
+  lastSeenAt  DateTime?
+  isSimulated Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  readings    SensorReading[]
+  alerts      Alert[]
+}
+
+model SensorReading {
+  id            String   @id @default(uuid())
+  sensorId      String
+  sensor        Sensor   @relation(fields: [sensorId], references: [id], onDelete: Cascade)
+  value         Float
+  recordedAt    DateTime @default(now())
+  source        String   @default("SIMULATOR") // SIMULATOR, HARDWARE_ESP32, API_INGEST
+  qualityStatus String   @default("GOOD")      // GOOD, SUSPECT, FAULT
+  createdAt     DateTime @default(now())
+
+  @@index([sensorId, recordedAt])
+  @@index([recordedAt])
+}
+
+model IrrigationController {
+  id             String    @id @default(uuid())
+  fieldId        String    @unique
+  field          Field     @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  controllerCode String    @unique
+  status         String    @default("IDLE") // IDLE, RUNNING, FAULT
+  isSimulated    Boolean   @default(true)
+  lastCommandAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model IrrigationSettings {
+  id                      String   @id @default(uuid())
+  fieldId                 String   @unique
+  field                   Field    @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  autoMode                Boolean  @default(false)
+  minMoistureThreshold    Float    @default(35.0)
+  targetMoistureThreshold Float    @default(65.0)
+  maxRunDurationSeconds   Int      @default(600) // 10 minutes
+  cooldownMinutes         Int      @default(60)  // 1 hour
+  suspendOnRain           Boolean  @default(true)
+  rainThresholdMm         Float    @default(5.0)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model IrrigationEvent {
+  id                   String    @id @default(uuid())
+  fieldId              String
+  field                Field     @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  startTime            DateTime  @default(now())
+  endTime              DateTime?
+  durationSeconds      Int?
+  estimatedWaterLiters Float?
+  mode                 String    @default("MANUAL") // MANUAL, AUTOMATIC
+  status               String    @default("RUNNING") // RUNNING, COMPLETED, STOPPED_BY_SAFETY, STOPPED_BY_USER, FAILED
+  triggeredBy          String?   // User name or "Automatic Rule Engine"
+  reason               String?
+  createdAt            DateTime  @default(now())
+
+  @@index([fieldId, startTime])
+}
+
+model Alert {
+  id             String    @id @default(uuid())
+  fieldId        String
+  field          Field     @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  sensorId       String?
+  sensor         Sensor?   @relation(fields: [sensorId], references: [id], onDelete: SetNull)
+  type           String    // LOW_MOISTURE, HIGH_TEMP, LOW_TEMP, ABNORMAL_PH, SENSOR_OFFLINE, IRRIGATION_ISSUE
+  severity       String    @default("WARNING") // INFO, WARNING, CRITICAL
+  message        String
+  status         String    @default("ACTIVE")  // ACTIVE, ACKNOWLEDGED, RESOLVED
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  resolvedAt     DateTime?
+  resolvedBy     String?
+  createdAt      DateTime  @default(now())
+
+  @@index([fieldId, status])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   @default("INFO")
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String   // CREATE, UPDATE, DELETE, IRRIGATION_START, IRRIGATION_STOP, SENSOR_SIMULATION_TOGGLE, LOGIN
+  entityType String   // FARM, FIELD, CROP, SENSOR, IRRIGATION, USER, SYSTEM
+  entityId   String?
+  metadata   String?  // JSON stringified details
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+}
